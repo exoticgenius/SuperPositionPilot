@@ -2,11 +2,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-    var sss = new SPV<SPV<long>>(new SPV<long>(long.MaxValue));
-
-    Console.WriteLine(Marshal.SizeOf(default(SPV<SPV<long>>)));
-
-Console.ReadLine();
 var x = new X();
 
 Console.WriteLine(x.Z("1", 2));
@@ -22,8 +17,6 @@ Console.WriteLine(x2.Z(null, 2));
 
 Console.ReadLine();
 
-
-
 public class RuntimeMethodModifier
 {
     public static void ModifyMethodToAddTryCatch(MethodInfo methodToModify)
@@ -31,7 +24,7 @@ public class RuntimeMethodModifier
         var dynamicMethod = new DynamicMethod(
             methodToModify.Name,
             methodToModify.ReturnType,
-            Type.EmptyTypes, // assuming no parameters for simplicity, modify for your needs
+            methodToModify.GetParameters().Select(x => x.ParameterType).ToArray(), // assuming no parameters for simplicity, modify for your needs
             methodToModify.DeclaringType
         );
 
@@ -73,14 +66,41 @@ public class RuntimeMethodModifier
 
         ilGen.Emit(OpCodes.Ret);
 
-        //methodToModify.DeclaringType.define
+        var ps = methodToModify.GetParameters().Select(x => x.ParameterType).ToList();
+        ps.Add(methodToModify.ReturnType);
+        var f = GetProperFuncType(ps.Count);
+        var del = f.MakeGenericType(ps.ToArray());
+
 
         // Complete the dynamic method
-        //var modifiedMethod = dynamicMethod.CreateDelegate(methodToModify.DeclaringType);
+        var modifiedMethod = dynamicMethod.CreateDelegate(del);
 
-        // Use reflection to replace the original method body (requires unsafe code)
-        //ReplaceMethodBody(methodToModify, modifiedMethod);
+        //use reflection to replace the original method body(requires unsafe code)
+        ReplaceMethodBody(methodToModify, modifiedMethod);
     }
+
+    public static Type GetProperFuncType(int c) => c switch
+    {
+        1 => typeof(Func<>),
+        2 => typeof(Func<,>),
+        3 => typeof(Func<,,>),
+        4 => typeof(Func<,,,>),
+        5 => typeof(Func<,,,,>),
+        6 => typeof(Func<,,,,,>),
+        7 => typeof(Func<,,,,,,>),
+        8 => typeof(Func<,,,,,,,>),
+        9 => typeof(Func<,,,,,,,,>),
+        10 => typeof(Func<,,,,,,,,,>),
+        11 => typeof(Func<,,,,,,,,,,>),
+        12 => typeof(Func<,,,,,,,,,,,>),
+        13 => typeof(Func<,,,,,,,,,,,,>),
+        14 => typeof(Func<,,,,,,,,,,,,,>),
+        15 => typeof(Func<,,,,,,,,,,,,,,>),
+        16 => typeof(Func<,,,,,,,,,,,,,,,>),
+        17 => typeof(Func<,,,,,,,,,,,,,,,,>),
+        _ => throw new Exception()
+    };
+
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
@@ -126,7 +146,6 @@ public class RuntimeMethodModifier
     }
 }
 
-
 public class X
 {
     public string Z(string first, int z)
@@ -147,7 +166,6 @@ public struct SPR<T>
 
     public SPR(T val)
     {
-        
         Value = new SPV<T>(val);
         Fault = default;
     }
@@ -185,13 +203,13 @@ public struct SPR<T>
         fault = default;
         return false;
     }
-     
+
     public static implicit operator SPR<T>(in T val)
     {
         return new SPR<T>(val);
     }
 
-    public static implicit operator SPR<T>(in SPF fault) => 
+    public static implicit operator SPR<T>(in SPF fault) =>
         new SPR<T>(fault);
 }
 
@@ -200,38 +218,77 @@ public struct SPR<T>
 /// </summary>
 public struct SPF
 {
-    public string? Message { get; init; }
-    public Exception? Exception { get; init; }
+    #region ' props '
+    public LinkedList<Type>? CapturedContext { get; private set; }
 
-    public object[] Parameters { get; init; }
+    public object[]? Parameters { get; private set; }
 
-    public SPF()
+    public Exception? Exception { get; private set; }
+
+    public string? Message { get; private set; }
+    #endregion ' props '
+
+    #region ' ctors '
+    public SPF() : this(default, default, default, default) { }
+
+    public SPF(Type capturedContext) : this(capturedContext, default, default, default) { }
+
+    public SPF(object[] parameters) : this(default, parameters, default, default) { }
+
+    public SPF(Exception exception) : this(default, default, exception, default) { }
+
+    public SPF(string message) : this(default, default, default, message) { }
+
+    public SPF(Exception exception, string message) : this(default, default, exception, message) { }
+
+    public SPF(object[] parameters, Exception exception) : this(default, parameters, exception, default) { }
+
+    public SPF(object[] parameters, Exception exception, string message) : this(default, parameters, exception, message) { }
+
+    public SPF(object[] parameters, string message) : this(default, parameters, default, message) { }
+
+    public SPF(Type capturedContext, object[] parameters) : this(capturedContext, parameters, default, default) { }
+
+    public SPF(Type capturedContext, Exception exception) : this(capturedContext, default, exception, default) { }
+
+    public SPF(Type capturedContext, string message) : this(capturedContext, default, default, message) { }
+
+    public SPF(Type capturedContext, Exception exception, string message) : this(capturedContext, default, exception, message) { }
+
+    public SPF(Type capturedContext, object[] parameters, Exception exception) : this(capturedContext, parameters, exception, default) { }
+
+    public SPF(Type capturedContext, object[] parameters, string message) : this(capturedContext, parameters, default, message) { }
+
+    public SPF(Type? capturedContext, object[]? parameters, Exception? exception, string? message)
     {
-        Exception = null;
-        Message = null;
-    }
+        CapturedContext = capturedContext is not null ?
+            new LinkedList<Type>([capturedContext]) :
+            null;
 
-    public SPF(string message)
-    {
-        Exception = default;
+        Parameters = parameters;
+        Exception = exception;
         Message = message;
     }
+    #endregion ' ctors '
 
-    public SPF(Exception exception)
-    {
-        Exception = exception;
-        Message = exception.Message;
-    }
-
-    public SPF(Exception exception, string message)
-    {
-        Exception = exception;
-        Message = message;
-    }
-
-    public static SPF Gen(string message) => new SPF(message);
+    #region ' generators '
+    public static SPF Gen() => new SPF();
+    public static SPF Gen(Type capturedContext) => new SPF(capturedContext);
+    public static SPF Gen(object[] parameters) => new SPF(parameters);
     public static SPF Gen(Exception exception) => new SPF(exception);
+    public static SPF Gen(string message) => new SPF(message);
     public static SPF Gen(Exception exception, string message) => new SPF(exception, message);
+    public static SPF Gen(object[] parameters, Exception exception) => new SPF(parameters, exception);
+    public static SPF Gen(object[] parameters, string message) => new SPF(parameters, message);
+    public static SPF Gen(object[] parameters, Exception exception, string message) => new SPF(parameters, exception, message);
+    public static SPF Gen(Type capturedContext, object[] parameters) => new SPF(capturedContext, parameters);
+    public static SPF Gen(Type capturedContext, Exception exception) => new SPF(capturedContext, exception);
+    public static SPF Gen(Type capturedContext, string message) => new SPF(capturedContext, message);
+    public static SPF Gen(Type capturedContext, Exception exception, string message) => new SPF(capturedContext, exception, message);
+    public static SPF Gen(Type capturedContext, object[] parameters, Exception exception) => new SPF(capturedContext, parameters, exception);
+    public static SPF Gen(Type capturedContext, object[] parameters, string message) => new SPF(capturedContext, parameters, message);
+    public static SPF Gen(Type capturedContext, object[] parameters, Exception exception, string message) => new SPF(capturedContext, parameters, exception, message);
+    #endregion ' generators '
 }
 
 /// <summary>
