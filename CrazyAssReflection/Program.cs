@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 var x = new X();
 
 Console.WriteLine(x.Z("1", 2));
-Console.WriteLine(x.Z(null, 2));
 
 RuntimeMethodModifier.ModifyMethodToAddTryCatch(typeof(X).GetMethod("Z")!);
 
@@ -26,57 +25,26 @@ public class RuntimeMethodModifier
             methodToModify.ReturnType,
             methodToModify.GetParameters().Select(x => x.ParameterType).ToArray(), // assuming no parameters for simplicity, modify for your needs
             methodToModify.DeclaringType
+
         );
 
         ILGenerator ilGen = dynamicMethod.GetILGenerator();
 
-        // Begin the try block
-        Label tryStart = ilGen.BeginExceptionBlock();
-        Label tryEnd = ilGen.DefineLabel();
-        Label catchStart = ilGen.DefineLabel();
-        Label afterCatch = ilGen.DefineLabel();
-
-        // Call the original method
-        ilGen.Emit(OpCodes.Call, methodToModify);
-        ilGen.Emit(OpCodes.Leave, afterCatch);
-
-        // Begin the catch block
-        ilGen.BeginCatchBlock(typeof(Exception));
-
-        // Emit logic to return null when an exception occurs
-        if (methodToModify.ReturnType.IsValueType)
-        {
-            LocalBuilder local = ilGen.DeclareLocal(methodToModify.ReturnType);
-            ilGen.Emit(OpCodes.Ldloca, local);
-            ilGen.Emit(OpCodes.Initobj, methodToModify.ReturnType);
-            ilGen.Emit(OpCodes.Ldloc, local);
-        }
-        else
-        {
-            ilGen.Emit(OpCodes.Ldnull);
-        }
-
-        ilGen.Emit(OpCodes.Leave, afterCatch);
-
-        // End try-catch block
-        ilGen.EndExceptionBlock();
-
-        // Mark the end label
-        ilGen.MarkLabel(afterCatch);
-
+        ilGen.Emit(OpCodes.Ldstr, "123");
         ilGen.Emit(OpCodes.Ret);
+
 
         var ps = methodToModify.GetParameters().Select(x => x.ParameterType).ToList();
         ps.Add(methodToModify.ReturnType);
         var f = GetProperFuncType(ps.Count);
         var del = f.MakeGenericType(ps.ToArray());
-
+        var genericArgs = f.GetGenericArguments();
 
         // Complete the dynamic method
         var modifiedMethod = dynamicMethod.CreateDelegate(del);
-
+        var re = modifiedMethod.DynamicInvoke("123", 123);
         //use reflection to replace the original method body(requires unsafe code)
-        ReplaceMethodBody(methodToModify, modifiedMethod);
+        ReplaceMethodBody(methodToModify, modifiedMethod, genericArgs);
     }
 
     public static Type GetProperFuncType(int c) => c switch
@@ -107,16 +75,19 @@ public class RuntimeMethodModifier
 
     private const uint PAGE_EXECUTE_READWRITE = 0x40;
 
-    public static void ReplaceMethodBody(MethodInfo methodToModify, Delegate newMethod)
+    public static void ReplaceMethodBody(MethodInfo methodToModify, Delegate newMethod, Type[] genericArgs)
     {
         // Get the method handle for the method to modify
         RuntimeMethodHandle methodHandle = methodToModify.MethodHandle;
 
+        MethodReplacer.Replace(methodToModify, newMethod.Method);
+
+        return;
         // Get the function pointer for the new method
-        IntPtr newMethodPtr = GetMethodPointer(newMethod.Method);
+        IntPtr newMethodPtr = GetMethodPointer(newMethod.Method, genericArgs);
 
         // Get the function pointer for the original method
-        IntPtr methodPtr = GetMethodPointer(methodToModify);
+        IntPtr methodPtr = GetMethodPointer(methodToModify, genericArgs);
 
         // Unprotect the memory region where the method body resides (required for modification)
         if (VirtualProtect(methodPtr, new UIntPtr((uint)IntPtr.Size), PAGE_EXECUTE_READWRITE, out uint oldProtect))
@@ -136,13 +107,53 @@ public class RuntimeMethodModifier
         }
     }
 
-    private static IntPtr GetMethodPointer(MethodInfo method)
+    private static IntPtr GetMethodPointer(MethodInfo method, Type[] genericArgs)
     {
         // Ensure that the method is JIT-compiled and ready
-        RuntimeHelpers.PrepareMethod(method.MethodHandle);
+        RuntimeHelpers.PrepareMethod(method.MethodHandle, genericArgs.Select(x=>x.TypeHandle).ToArray());
 
         // Return the function pointer for the method
         return method.MethodHandle.GetFunctionPointer();
+    }
+
+    public static class MethodReplacer
+    {
+        public static unsafe void Replace(MethodInfo methodToReplace, MethodInfo methodToInject)
+        {
+            var isInjectedMethodDynamic = methodToInject is DynamicMethod;
+
+            RuntimeHelpers.PrepareMethod(methodToReplace.MethodHandle);
+            if (!isInjectedMethodDynamic)
+            {
+                RuntimeHelpers.PrepareMethod(methodToInject.MethodHandle);
+            }
+            else
+            {
+                var dynamicMethodHandle = GetDynamicHandle(methodToInject as DynamicMethod);
+                RuntimeHelpers.PrepareMethod(dynamicMethodHandle);
+            }
+
+            unsafe
+            {
+
+                    long* inj = isInjectedMethodDynamic
+                        ? (long*)GetDynamicHandle(methodToInject as DynamicMethod).Value.ToPointer() + 1
+                        : (long*)methodToInject.MethodHandle.Value.ToPointer() + 1;
+                    long* tar = (long*)methodToReplace.MethodHandle.Value.ToPointer() + 1;
+
+                    *tar = *inj;
+                
+            }
+        }
+
+        private static RuntimeMethodHandle GetDynamicHandle(DynamicMethod dynamicMethod)
+        {
+            var descr = typeof(DynamicMethod)
+                .GetMethod("GetMethodDescriptor", BindingFlags.Instance | BindingFlags.NonPublic);
+
+            var res = (RuntimeMethodHandle)descr.Invoke(dynamicMethod, null);
+            return res;
+        }
     }
 }
 
@@ -150,6 +161,7 @@ public class X
 {
     public string Z(string first, int z)
     {
+        //if(first == null)throw new ArgumentNullException("first");
         return first + z;
     }
 }
