@@ -2,20 +2,24 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Linq.Expressions;
 var x = new X();
 
-Console.WriteLine(x.Z("1", 2));
 
 RuntimeMethodModifier.ModifyMethodToAddTryCatch(typeof(X).GetMethod("Z")!);
 
 
 var x2 = new X();
 
-Console.WriteLine(x2.Z("1", 2));
-Console.WriteLine(x2.Z(null, 2));
+Console.WriteLine(x2.Z(null, 456));
 
 Console.ReadLine();
-
+static class Method
+{
+    public static MethodInfo Of<TResult>(Expression<Func<TResult>> f) => ((MethodCallExpression)f.Body).Method;
+    public static MethodInfo Of<T>(Expression<Action<T>> f) => ((MethodCallExpression)f.Body).Method;
+    public static MethodInfo Of(Expression<Action> f) => ((MethodCallExpression)f.Body).Method;
+}
 public class RuntimeMethodModifier
 {
     public static void ModifyMethodToAddTryCatch(MethodInfo methodToModify)
@@ -33,18 +37,26 @@ public class RuntimeMethodModifier
 
         Label exBlock = il.BeginExceptionBlock();
         Label end = il.DefineLabel();
-        il.DeclareLocal(typeof(string));
+        il.DeclareLocal(methodToModify.ReturnType);
+
+        il.Emit(OpCodes.Newobj, typeof(X).GetConstructors()[0]);
+
+        for (int i = 0; i < methodToModify.GetParameters().Length; i++)
+            il.Emit(OpCodes.Ldarg, i );
+
+        il.Emit(OpCodes.Call, methodToModify);
 
 
-        il.Emit(OpCodes.Ldstr, "123");
         il.Emit(OpCodes.Stloc_0);
-        il.ThrowException(typeof(Exception));
         il.Emit(OpCodes.Leave_S, end);
+
+
+
+
 
         il.BeginCatchBlock(typeof(Exception));
 
-        il.Emit(OpCodes.Pop);
-        il.Emit(OpCodes.Ldstr, "456");
+        il.Emit(OpCodes.Callvirt, typeof(Exception).GetMethod("get_Message"));
         il.Emit(OpCodes.Stloc_0);
         il.Emit(OpCodes.Leave_S, end);
 
@@ -64,7 +76,7 @@ public class RuntimeMethodModifier
 
         // Complete the dynamic method
         var modifiedMethod = dynamicMethod.CreateDelegate(del);
-        var re = modifiedMethod.DynamicInvoke("123", 123);
+        var re = modifiedMethod.DynamicInvoke("123", 456);
         //use reflection to replace the original method body(requires unsafe code)
         ReplaceMethodBody(methodToModify, modifiedMethod, genericArgs);
     }
@@ -181,10 +193,10 @@ public class RuntimeMethodModifier
 
 public class X
 {
-    public string Z(string first, int z)
+    public string Z(string v, int v1)
     {
-        //if(first == null)throw new ArgumentNullException("first");
-        return first + z;
+        if(v == null)throw new ArgumentNullException("first");
+        return v + v1 + "RRR";
     }
 }
 
