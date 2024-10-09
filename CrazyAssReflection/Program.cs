@@ -28,10 +28,32 @@ public class RuntimeMethodModifier
 
         );
 
-        ILGenerator ilGen = dynamicMethod.GetILGenerator();
+        ILGenerator il = dynamicMethod.GetILGenerator();
 
-        ilGen.Emit(OpCodes.Ldstr, "123");
-        ilGen.Emit(OpCodes.Ret);
+
+        Label exBlock = il.BeginExceptionBlock();
+        Label end = il.DefineLabel();
+        il.DeclareLocal(typeof(string));
+
+
+        il.Emit(OpCodes.Ldstr, "123");
+        il.Emit(OpCodes.Stloc_0);
+        il.ThrowException(typeof(Exception));
+        il.Emit(OpCodes.Leave_S, end);
+
+        il.BeginCatchBlock(typeof(Exception));
+
+        il.Emit(OpCodes.Pop);
+        il.Emit(OpCodes.Ldstr, "456");
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Leave_S, end);
+
+        il.EndExceptionBlock();
+
+        il.MarkLabel(end);
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Ret);
+
 
 
         var ps = methodToModify.GetParameters().Select(x => x.ParameterType).ToList();
