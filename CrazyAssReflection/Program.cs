@@ -18,7 +18,7 @@ try
 }
 catch (Exception e)
 {
-    Console.WriteLine(e.Message);
+    Console.WriteLine("dddd " + e.Message);
 }
 Console.ReadLine();
 static class Method
@@ -52,12 +52,12 @@ public class RuntimeMethodModifier
         Label end = il.DefineLabel();
         il.DeclareLocal(methodToModify.ReturnType);
 
-        //il.Emit(OpCodes.Newobj, typeof(X).GetConstructors()[0]);
+        il.Emit(OpCodes.Newobj, typeof(X).GetConstructors()[0]);
         for (int i = 0; i < prms.Count; i++)
             il.Emit(OpCodes.Ldarg, i);
 
-        //il.Emit(OpCodes.Call, methodToModify.GetRuntimeBaseDefinition());
-        il.Emit(OpCodes.Ldstr, "123");
+        il.Emit(OpCodes.Call, methodToModify);
+        //il.Emit(OpCodes.Ldstr, "123");
 
 
 
@@ -69,7 +69,9 @@ public class RuntimeMethodModifier
         il.Emit(OpCodes.Leave_S, end);
         il.BeginCatchBlock(typeof(Exception));
 
-        il.Emit(OpCodes.Callvirt, typeof(Exception).GetMethod("get_Message"));
+        //il.Emit(OpCodes.Callvirt, typeof(Exception).GetMethod("get_Message"));
+        il.Emit(OpCodes.Pop);
+        il.Emit(OpCodes.Ldstr,"caught");
         il.Emit(OpCodes.Stloc_0);
         il.Emit(OpCodes.Leave_S, end);
 
@@ -91,9 +93,9 @@ public class RuntimeMethodModifier
 
         // Complete the dynamic method
         var modifiedMethod = dynamicMethod.CreateDelegate(del);
-        //var res= modifiedMethod.Method.Invoke(new X(), ["123", 456]);
+        var res= modifiedMethod.Method.Invoke(new X(), ["123", 456]);
         //use reflection to replace the original method body(requires unsafe code)
-        ReplaceMethodBody(methodToModify.GetRuntimeBaseDefinition(), modifiedMethod, genericArgs);
+        ReplaceMethodBody(methodToModify, modifiedMethod, genericArgs);
 
 
         //MethodReplacer.Replace(methodToModify, modifiedMethod.Method as DynamicMethod);
