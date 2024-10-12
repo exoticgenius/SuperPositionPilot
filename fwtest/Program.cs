@@ -4,18 +4,20 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
 
-
-//var nt = Extend(typeof(X));
-//var r =Activator.CreateInstance(nt);
-//var r2 = nt.GetMethod("Z").Invoke(r, [null, 1]);
 var sc = new ServiceCollection();
 sc.AddSingleton<IX, X>();
+
+
+var r = SP.Extend<X>();
+
 
 foreach (var service in sc.ToList())
     sc.Replace(ServiceDescriptor.Describe(
         service.ServiceType,
-        Extend(service.ImplementationType),
+        SP.Extend(service.ImplementationType),
         service.Lifetime));
 
 
@@ -23,165 +25,226 @@ var sp = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = 
 
 var s = sp.GetService<IX>();
 
-var res = s.Z("000", 2);
+var res = s.Z(null, 2);
 
-if (!res.Succeed(out (string rx, int ry) val))
-    return;
+if (!(await res).Succeed(out string rx))
+{
+    Console.WriteLine("error captured");
+}
 
-Console.WriteLine(val.rx);
-
+Console.WriteLine(rx);
 
 
 
 Console.ReadLine();
 
 
-static Type Extend(Type pluginType)
+public static class SP
 {
+    private static ConcurrentDictionary<Assembly, ModuleBuilder> ModuleBuilders;
+    private static ConcurrentDictionary<Type, Type> TypeMapper;
 
-    var assemblyName = Guid.NewGuid().ToString();
-    var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
-    var module = assembly.DefineDynamicModule("Module");
-    var type = module.DefineType("WrapperImplementation_" + pluginType.Name, TypeAttributes.Public, pluginType, pluginType.GetInterfaces());
-
-    foreach (var item in pluginType.GetConstructors())
-        GenerateConstructor(type, item);
-    foreach (var item in pluginType.GetRuntimeMethods().Where(x => typeof(ISPR).IsAssignableFrom(x.ReturnType)))
-        GenerateMethod(item, type);
-
-    var ct = type.CreateType();
-
-    return ct;
-}
-static void GenerateConstructor(TypeBuilder type, ConstructorInfo item)
-{
-    var prms = new List<Type>();
-    prms.AddRange(item.GetParameters().Select(x => x.ParameterType).ToArray());
-    var ctor = type.DefineConstructor(item.Attributes, item.CallingConvention, prms.ToArray());
-    var il = ctor.GetILGenerator();
-
-    for (int i = 0; i < prms.Count + 1; i++)
-        il.Emit(OpCodes.Ldarg, i);
-
-    il.Emit(OpCodes.Call, item);
-    il.Emit(OpCodes.Ret);
-}
-static void GenerateMethod(MethodInfo pm, TypeBuilder type)
-{
-    var prms = new List<Type>();
-    prms.AddRange(pm.GetParameters().Select(x => x.ParameterType).ToArray());
-
-    var method = type.DefineMethod(
-        pm.Name,
-        MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.Virtual | MethodAttributes.NewSlot,
-        CallingConventions.Standard | CallingConventions.HasThis,
-        pm.ReturnType,
-        pm.GetParameters().Select(x => x.ParameterType).ToArray());
-    var il = method.GetILGenerator();
-
-    Label exBlock = il.BeginExceptionBlock();
-    Label end = il.DefineLabel();
-    il.DeclareLocal(pm.ReturnType); //      0
-    il.DeclareLocal(typeof(Type)); //       1
-    il.DeclareLocal(typeof(Exception)); //  2
-
-    for (int i = 0; i < prms.Count + 1; i++)
-        il.Emit(OpCodes.Ldarg, i);
-
-    il.Emit(OpCodes.Call, pm);
-
-
-
-    il.Emit(OpCodes.Stloc_0);
-    il.Emit(OpCodes.Leave_S, end);
-    il.BeginCatchBlock(typeof(Exception));
-
-    il.Emit(OpCodes.Stloc_2);
-    il.Emit(OpCodes.Ldtoken, pm.DeclaringType);
-    il.Emit(OpCodes.Ldloc_1); // 1 => 0
-
-
-    il.Emit(OpCodes.Ldc_I4, prms.Count);
-    il.Emit(OpCodes.Newarr, typeof(object)); // => 1
-
-    for (int i = 0; i < prms.Count; i++)
+    static SP()
     {
-        il.Emit(OpCodes.Dup);
-        il.Emit(OpCodes.Ldc_I4, i);
-        il.Emit(OpCodes.Ldarg, i + 1);
-        if (prms[i].IsValueType)
-            il.Emit(OpCodes.Box, prms[i]);
-        il.Emit(OpCodes.Stelem_Ref);
+        ModuleBuilders = new();
+        TypeMapper = new();
     }
 
-    il.Emit(OpCodes.Ldloc_2); //2
+    public static Type Extend<T>() =>
+        Extend(typeof(T));
 
-    il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor([typeof(Type), typeof(object[]), typeof(Exception)])!);
-    il.Emit(OpCodes.Newobj, pm.ReturnType.GetConstructor([typeof(SPF)])!);
-    il.Emit(OpCodes.Stloc_0);
-    il.Emit(OpCodes.Leave_S, end);
-
-    il.EndExceptionBlock();
-
-    il.MarkLabel(end);
-    il.Emit(OpCodes.Ldloc_0);
-    il.Emit(OpCodes.Ret);
-}
-
-
-[DllImport("kernel32.dll", SetLastError = true)]
-static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
-
-const uint PAGE_EXECUTE_READWRITE = 0x40;
-
-static void ReplaceMethodBody(MethodInfo methodToModify, MethodInfo newMethod)
-{
-    // Get the method handle for the method to modify
-    RuntimeMethodHandle methodHandle = methodToModify.MethodHandle;
-
-
-    // Get the function pointer for the new method
-    IntPtr newMethodPtr = GetMethodPointer(newMethod);
-
-    // Get the function pointer for the original method
-    IntPtr methodPtr = GetMethodPointer(methodToModify);
-
-    // Unprotect the memory region where the method body resides (required for modification)
-    if (VirtualProtect(methodPtr, new UIntPtr((uint)IntPtr.Size), PAGE_EXECUTE_READWRITE, out uint oldProtect))
+    public static Type Extend(Type target)
     {
-        // Replace the function pointer with the new one
-        unsafe
+        var module = ModuleBuilders
+            .GetOrAdd(
+                target.Assembly,
+                (a) => AssemblyBuilder
+                    .DefineDynamicAssembly(
+                        new AssemblyName($"RuntimeAssembly_{a.FullName}"),
+                        AssemblyBuilderAccess.Run)
+                    .DefineDynamicModule("Module"));
+
+        var typeName = $"RuntimeType_{Guid.NewGuid()}_{target.Name}";
+
+        if (TypeMapper.TryGetValue(target, out var type))
+            return type;
+
+        var typeBuilder = module.DefineType(
+            typeName,
+            TypeAttributes.Public,
+            target,
+            target.GetInterfaces());
+
+        foreach (var item in target.GetConstructors())
+            GenerateConstructor(typeBuilder, item);
+
+        foreach (var item in target
+            .GetRuntimeMethods()
+            .Where(x => typeof(ISPR).IsAssignableFrom(x.ReturnType) || typeof(Task).IsAssignableFrom(x.ReturnType)))
+            GenerateMethod(item, typeBuilder);
+
+        return TypeMapper[target] = typeBuilder.CreateType()!;
+    }
+
+    private static void GenerateConstructor(TypeBuilder type, ConstructorInfo item)
+    {
+        var prms = new List<Type>();
+        prms.AddRange(item.GetParameters().Select(x => x.ParameterType).ToArray());
+        var ctor = type.DefineConstructor(item.Attributes, item.CallingConvention, prms.ToArray());
+        var il = ctor.GetILGenerator();
+
+        for (int i = 0; i < prms.Count + 1; i++)
+            il.Emit(OpCodes.Ldarg, i);
+
+        il.Emit(OpCodes.Call, item);
+        il.Emit(OpCodes.Ret);
+    }
+
+    private static void GenerateMethod(MethodInfo methodinfo, TypeBuilder type)
+    {
+        var prms = new List<Type>();
+        prms.AddRange(methodinfo.GetParameters().Select(x => x.ParameterType).ToArray());
+        var returnType = methodinfo.ReturnType
+        var method = type.DefineMethod(
+            methodinfo.Name,
+            MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.Virtual | MethodAttributes.NewSlot,
+            CallingConventions.Standard | CallingConventions.HasThis,
+            methodinfo.ReturnType,
+            methodinfo.GetParameters().Select(x => x.ParameterType).ToArray());
+        var il = method.GetILGenerator();
+
+        Label exBlock = il.BeginExceptionBlock();
+        Label end = il.DefineLabel();
+        il.DeclareLocal(methodinfo.ReturnType); //      0
+        il.DeclareLocal(typeof(Type)); //       1
+        il.DeclareLocal(typeof(Exception)); //  2
+
+        for (int i = 0; i < prms.Count + 1; i++)
+            il.Emit(OpCodes.Ldarg, i);
+
+        il.Emit(OpCodes.Call, methodinfo);
+
+
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Leave_S, end);
+        il.BeginCatchBlock(typeof(Exception));
+
+        il.Emit(OpCodes.Stloc_2);
+        il.Emit(OpCodes.Ldtoken, methodinfo.DeclaringType!);
+        il.Emit(OpCodes.Ldloc_1); // 1 => 0
+
+
+        il.Emit(OpCodes.Ldc_I4, prms.Count);
+        il.Emit(OpCodes.Newarr, typeof(object)); // => 1
+
+        for (int i = 0; i < prms.Count; i++)
         {
-            Buffer.MemoryCopy((void*)newMethodPtr, (void*)methodPtr, sizeof(void*), sizeof(void*));
+            il.Emit(OpCodes.Dup);
+            il.Emit(OpCodes.Ldc_I4, i);
+            il.Emit(OpCodes.Ldarg, i + 1);
+            if (prms[i].IsValueType)
+                il.Emit(OpCodes.Box, prms[i]);
+            il.Emit(OpCodes.Stelem_Ref);
         }
 
-        // Restore the memory protection to the original state
-        VirtualProtect(methodPtr, new UIntPtr((uint)IntPtr.Size), oldProtect, out _);
+        il.Emit(OpCodes.Ldloc_2); //2
+
+        il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor(new Type[] { typeof(Type), typeof(object[]), typeof(Exception) })!);
+        il.Emit(OpCodes.Newobj, methodinfo.ReturnType.GetConstructor(new Type[] { typeof(SPF) })!);
+        il.Emit(OpCodes.Stloc_0);
+        il.Emit(OpCodes.Leave_S, end);
+
+        il.EndExceptionBlock();
+
+        il.MarkLabel(end);
+        il.Emit(OpCodes.Ldloc_0);
+        il.Emit(OpCodes.Ret);
     }
-    else
+
+    private static async Task<T> SuppressTask<T>(Task<T> input)
     {
-        throw new Exception("Failed to modify method body.");
+        return Task;
+    }
+
+    public static T Gen<T>(params object?[]? @params) =>
+        SP<T>.Gen(@params);
+
+    public static SPR<T> Sup<T>(Func<T> function)
+    {
+        try
+        {
+            return function();
+        }
+        catch (Exception e)
+        {
+            return new SPR<T>(new SPF(e));
+        }
     }
 }
 
-static IntPtr GetMethodPointer(MethodInfo method)
+public static class SP<T>
 {
-    // Ensure that the method is JIT-compiled and ready
-    RuntimeHelpers.PrepareMethod(method.MethodHandle);
+    private static Type GeneratedType = SP.Extend<T>();
 
-    // Return the function pointer for the method
-    return method.MethodHandle.GetFunctionPointer();
+    public static T Gen(params object?[]? @params)
+    {
+        return (T)Activator.CreateInstance(GeneratedType, @params)!;
+    }
 }
+
+//[DllImport("kernel32.dll", SetLastError = true)]
+//static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+
+//const uint PAGE_EXECUTE_READWRITE = 0x40;
+
+//static void ReplaceMethodBody(MethodInfo methodToModify, MethodInfo newMethod)
+//{
+//    // Get the method handle for the method to modify
+//    RuntimeMethodHandle methodHandle = methodToModify.MethodHandle;
+
+
+//    // Get the function pointer for the new method
+//    IntPtr newMethodPtr = GetMethodPointer(newMethod);
+
+//    // Get the function pointer for the original method
+//    IntPtr methodPtr = GetMethodPointer(methodToModify);
+
+//    // Unprotect the memory region where the method body resides (required for modification)
+//    if (VirtualProtect(methodPtr, new UIntPtr((uint)IntPtr.Size), PAGE_EXECUTE_READWRITE, out uint oldProtect))
+//    {
+//        // Replace the function pointer with the new one
+//        unsafe
+//        {
+//            Buffer.MemoryCopy((void*)newMethodPtr, (void*)methodPtr, sizeof(void*), sizeof(void*));
+//        }
+
+//        // Restore the memory protection to the original state
+//        VirtualProtect(methodPtr, new UIntPtr((uint)IntPtr.Size), oldProtect, out _);
+//    }
+//    else
+//    {
+//        throw new Exception("Failed to modify method body.");
+//    }
+//}
+
+//static IntPtr GetMethodPointer(MethodInfo method)
+//{
+//    // Ensure that the method is JIT-compiled and ready
+//    RuntimeHelpers.PrepareMethod(method.MethodHandle);
+
+//    // Return the function pointer for the method
+//    return method.MethodHandle.GetFunctionPointer();
+//}
 
 public interface IX
 {
-    SPR<(string, int)> Z(string first, int z);
+    Task<SPR<string>> Z(string first, int z);
 }
 public class X : IX
 {
     public X()
     {
-
+        throw new Exception("stor");
     }
     private int x = 2;
     private IServiceProvider psp;
@@ -190,10 +253,11 @@ public class X : IX
         psp = sp;
         x = 3;
     }
-    public SPR<(string, int)> Z(string first, int z)
+    public async Task<SPR<string>> Z(string first, int z)
     {
+        await Task.Delay(1000);
         if (first == null) throw new ArgumentNullException("first");
-        return (x + first + z, x);
+        return x + first + z;
     }
 }
 
@@ -254,6 +318,58 @@ public struct SPR<T> : ISPR
     public static implicit operator SPR<T>(in SPF fault) =>
         new SPR<T>(fault);
 }
+//public struct TSPR<T> : ISPR
+//{
+//    private SPV<Task<T>> Value { get; }
+//    private SPF Fault { get; }
+
+//    public TSPR(Task<T> val)
+//    {
+//        Value = new SPV<Task<T>>(val);
+//        Fault = default;
+//    }
+
+//    public TSPR(SPF fault)
+//    {
+//        Value = default;
+//        Fault = fault;
+//    }
+
+//    public bool Succeed() => Value.Completed;
+
+//    public async Task<bool> Succeed(out T? result)
+//    {
+//        if (Value.Completed)
+//        {
+//            result = await Value.Payload;
+//            return true;
+//        }
+
+//        result = default;
+//        return false;
+//    }
+
+//    public bool Faulted() => !Value.Completed;
+
+//    public bool Faulted(out SPF fault)
+//    {
+//        if (!Value.Completed)
+//        {
+//            fault = Fault;
+//            return true;
+//        }
+
+//        fault = default;
+//        return false;
+//    }
+
+//    public static implicit operator SPR<T>(in T val) =>
+//        new SPR<T>(val);
+
+//    public static implicit operator SPR<T>(in SPF fault) =>
+//        new SPR<T>(fault);
+//}
+
 
 /// <summary>
 /// super position fault
