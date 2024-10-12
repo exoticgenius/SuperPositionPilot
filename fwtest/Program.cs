@@ -1,35 +1,135 @@
-﻿// See https://aka.ms/new-console-template for more information
-using System.Reflection.Emit;
+﻿using System.Reflection.Emit;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
-Console.WriteLine("Hello, World!");
 
-Extend(typeof(X));
+//var nt = Extend(typeof(X));
+//var r =Activator.CreateInstance(nt);
+//var r2 = nt.GetMethod("Z").Invoke(r, [null, 1]);
+var sc = new ServiceCollection();
+sc.AddSingleton<IX, X>();
+
+foreach (var service in sc.ToList())
+    sc.Replace(ServiceDescriptor.Describe(
+        service.ServiceType,
+        Extend(service.ImplementationType),
+        service.Lifetime));
+
+
+var sp = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = false });
+
+var s = sp.GetService<IX>();
+
+var res = s.Z(null, 2);
+
+
+
+
+
 
 Console.ReadLine();
 
 
-static void Extend(Type pluginType)
+static Type Extend(Type pluginType)
 {
 
     var assemblyName = Guid.NewGuid().ToString();
     var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run);
     var module = assembly.DefineDynamicModule("Module");
-    var type = module.DefineType("WrapperImplementation_" + pluginType.Name, TypeAttributes.Public, pluginType);
+    var type = module.DefineType("WrapperImplementation_" + pluginType.Name, TypeAttributes.Public, pluginType, pluginType.GetInterfaces());
+
+    foreach (var item in pluginType.GetConstructors())
+    {
+        GenerateConstructor(type, item);
+    }
+
 
     var pm = pluginType.GetMethod("Z");
 
     GenerateMethod(pm, type);
 
     var ct = type.CreateType();
-    var met = ct.GetMethod(pm.Name);
-    var res = met.Invoke(Activator.CreateInstance(ct), ["1", 456]);
 
-
-    Console.ReadLine();
+    return ct;
 }
+static void GenerateConstructor(TypeBuilder type, ConstructorInfo item)
+{
+    var prms = new List<Type>();
+    prms.AddRange(item.GetParameters().Select(x => x.ParameterType).ToArray());
+    var ctor = type.DefineConstructor(item.Attributes, item.CallingConvention, prms.ToArray());
+    var il = ctor.GetILGenerator();
+
+    for (int i = 0; i < prms.Count + 1; i++)
+        il.Emit(OpCodes.Ldarg, i);
+
+    il.Emit(OpCodes.Call, item);
+    il.Emit(OpCodes.Ret);
+}
+static void GenerateMethod(MethodInfo pm, TypeBuilder type)
+{
+    var prms = new List<Type>();
+    prms.AddRange(pm.GetParameters().Select(x => x.ParameterType).ToArray());
+
+    var method = type.DefineMethod(
+        pm.Name,
+        MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.Virtual | MethodAttributes.NewSlot,
+        CallingConventions.Standard | CallingConventions.HasThis,
+        pm.ReturnType,
+        pm.GetParameters().Select(x => x.ParameterType).ToArray());
+    var il = method.GetILGenerator();
+
+    Label exBlock = il.BeginExceptionBlock();
+    Label end = il.DefineLabel();
+    il.DeclareLocal(pm.ReturnType); //      0
+    il.DeclareLocal(typeof(Type)); //       1
+    il.DeclareLocal(typeof(Exception)); //  2
+
+    for (int i = 0; i < prms.Count + 1; i++)
+        il.Emit(OpCodes.Ldarg, i);
+
+    il.Emit(OpCodes.Call, pm);
+
+
+
+    il.Emit(OpCodes.Stloc_0);
+    il.Emit(OpCodes.Leave_S, end);
+    il.BeginCatchBlock(typeof(Exception));
+
+    il.Emit(OpCodes.Stloc_2);
+    il.Emit(OpCodes.Ldtoken, pm.DeclaringType);
+    il.Emit(OpCodes.Ldloc_1); // 1 => 0
+
+
+    il.Emit(OpCodes.Ldc_I4, prms.Count);
+    il.Emit(OpCodes.Newarr, typeof(object)); // => 1
+
+    for (int i = 0; i < prms.Count; i++)
+    {
+        il.Emit(OpCodes.Dup);
+        il.Emit(OpCodes.Ldc_I4, i);
+        il.Emit(OpCodes.Ldarg, i + 1);
+        if (prms[i].IsValueType)
+            il.Emit(OpCodes.Box, prms[i]);
+        il.Emit(OpCodes.Stelem_Ref);
+    }
+
+    il.Emit(OpCodes.Ldloc_2); //2
+
+    il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor([typeof(Type), typeof(object[]), typeof(Exception)])!);
+    il.Emit(OpCodes.Newobj, pm.ReturnType.GetConstructor([typeof(SPF)])!);
+    il.Emit(OpCodes.Stloc_0);
+    il.Emit(OpCodes.Leave_S, end);
+
+    il.EndExceptionBlock();
+
+    il.MarkLabel(end);
+    il.Emit(OpCodes.Ldloc_0);
+    il.Emit(OpCodes.Ret);
+}
+
 
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
@@ -75,70 +175,23 @@ static IntPtr GetMethodPointer(MethodInfo method)
     return method.MethodHandle.GetFunctionPointer();
 }
 
-static void GenerateMethod(MethodInfo pm, TypeBuilder type)
+public interface IX
 {
-    var prms = new List<Type>();
-    prms.AddRange(pm.GetParameters().Select(x => x.ParameterType).ToArray());
-
-    var method = type.DefineMethod(
-        pm.Name,
-        MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.Virtual,
-        CallingConventions.Standard | CallingConventions.HasThis,
-        pm.ReturnType,
-        pm.GetParameters().Select(x => x.ParameterType).ToArray());
-    var il = method.GetILGenerator();
-    //var impl = pm.GetMethodBody().GetILAsByteArray();
-
-    Label exBlock = il.BeginExceptionBlock();
-    Label end = il.DefineLabel();
-    il.DeclareLocal(pm.ReturnType); //      0
-    il.DeclareLocal(typeof(Type)); //       1
-    il.DeclareLocal(typeof(Exception)); //  2
-
-    for (int i = 0; i < prms.Count + 1; i++)
-        il.Emit(OpCodes.Ldarg, i);
-
-    il.Emit(OpCodes.Call, pm);
-
-
-
-    il.Emit(OpCodes.Stloc_0);
-    il.Emit(OpCodes.Leave_S, end);
-    il.BeginCatchBlock(typeof(Exception));
-
-    il.Emit(OpCodes.Stloc_2);
-    il.Emit(OpCodes.Stloc_1, pm.DeclaringType);
-    il.Emit(OpCodes.Ldloc_1);
-
-
-    il.Emit(OpCodes.Ldc_I4, prms.Count);
-    il.Emit(OpCodes.Newarr, typeof(object));
-    
-    //for (int i = 0; i < prms.Count; i++)
-    //{
-    //    il.Emit(OpCodes.Dup);
-    //    il.Emit(OpCodes.Ldc_I4, i);
-    //    il.Emit(OpCodes.Ldarg, i + 1);
-    //    il.Emit(OpCodes.Stelem_Ref, typeof(object));
-    //}
-
-    il.Emit(OpCodes.Ldloc_2); //2
-
-    il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor([typeof(Type), typeof(object[]), typeof(Exception)])!);
-    il.Emit(OpCodes.Newobj, pm.ReturnType.GetConstructor([typeof(SPF)])!);
-    il.Emit(OpCodes.Stloc_0);
-    il.Emit(OpCodes.Leave_S, end);
-
-    il.EndExceptionBlock();
-
-    il.MarkLabel(end);
-    il.Emit(OpCodes.Ldloc_0);
-    il.Emit(OpCodes.Ret);
+    SPR<(string, int)> Z(string first, int z);
 }
-
-public class X
+public class X : IX
 {
+    public X()
+    {
+        
+    }
     private int x = 2;
+    private IServiceProvider psp;
+    public X(IServiceProvider sp)
+    {
+        psp = sp;
+        x = 3;
+    }
     public SPR<(string, int)> Z(string first, int z)
     {
         if (first == null) throw new ArgumentNullException("first");
