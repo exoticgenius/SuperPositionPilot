@@ -11,6 +11,7 @@ var sc = new ServiceCollection();
 sc.AddSingleton<IX, X>();
 
 
+
 var r = SP.Extend<X>();
 
 
@@ -25,7 +26,7 @@ var sp = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = 
 
 var s = sp.GetService<IX>();
 
-var res = s.Z(null, 2);
+var res = s.Z("err", 2);
 
 if (!(await res).Succeed(out string rx))
 {
@@ -35,8 +36,9 @@ if (!(await res).Succeed(out string rx))
 Console.WriteLine(rx);
 
 
-
 Console.ReadLine();
+
+
 
 
 public static class SP
@@ -104,7 +106,7 @@ public static class SP
     {
         var prms = new List<Type>();
         prms.AddRange(methodinfo.GetParameters().Select(x => x.ParameterType).ToArray());
-        var returnType = methodinfo.ReturnType
+        var returnType = methodinfo.ReturnType;
         var method = type.DefineMethod(
             methodinfo.Name,
             MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.Virtual | MethodAttributes.NewSlot,
@@ -116,14 +118,22 @@ public static class SP
         Label exBlock = il.BeginExceptionBlock();
         Label end = il.DefineLabel();
         il.DeclareLocal(methodinfo.ReturnType); //      0
-        il.DeclareLocal(typeof(Type)); //       1
-        il.DeclareLocal(typeof(Exception)); //  2
+        il.DeclareLocal(typeof(Type)); //               1
+        il.DeclareLocal(typeof(Exception)); //          2
 
         for (int i = 0; i < prms.Count + 1; i++)
             il.Emit(OpCodes.Ldarg, i);
-
         il.Emit(OpCodes.Call, methodinfo);
 
+        if (typeof(Task).IsAssignableFrom(returnType))
+        {
+            il.Emit(OpCodes.Call, typeof(SP).GetMethods().First(x=>x.Name == "SuppressTask").MakeGenericMethod(returnType.GenericTypeArguments[0].GenericTypeArguments));
+        }
+        else if (typeof(ValueTask).IsAssignableFrom(returnType))
+        {
+
+            il.Emit(OpCodes.Call, typeof(SP).GetMethods().First(x => x.Name == "SuppressValueTask").MakeGenericMethod(returnType.GenericTypeArguments[0].GenericTypeArguments));
+        }
 
         il.Emit(OpCodes.Stloc_0);
         il.Emit(OpCodes.Leave_S, end);
@@ -150,7 +160,23 @@ public static class SP
         il.Emit(OpCodes.Ldloc_2); //2
 
         il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor(new Type[] { typeof(Type), typeof(object[]), typeof(Exception) })!);
-        il.Emit(OpCodes.Newobj, methodinfo.ReturnType.GetConstructor(new Type[] { typeof(SPF) })!);
+
+
+        if (typeof(Task).IsAssignableFrom(returnType))
+        {
+            il.Emit(OpCodes.Newobj, returnType.GenericTypeArguments[0].GetConstructor(new Type[] { typeof(SPF) })!);
+            il.Emit(OpCodes.Call, typeof(Task).GetRuntimeMethods().First(x => x.Name == "FromResult").MakeGenericMethod(returnType.GenericTypeArguments[0]));
+
+        }
+        else if (typeof(ValueTask).IsAssignableFrom(returnType))
+        {
+            il.Emit(OpCodes.Newobj, typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments).GetConstructor(new Type[] { typeof(SPF) })!);
+            il.Emit(OpCodes.Call, typeof(ValueTask<>).MakeGenericType(typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments)).GetConstructor([typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments)]));
+        }
+        else
+        {
+            il.Emit(OpCodes.Newobj, methodinfo.ReturnType.GetConstructor(new Type[] { typeof(SPF) })!);
+        }
         il.Emit(OpCodes.Stloc_0);
         il.Emit(OpCodes.Leave_S, end);
 
@@ -161,9 +187,27 @@ public static class SP
         il.Emit(OpCodes.Ret);
     }
 
-    private static async Task<T> SuppressTask<T>(Task<T> input)
+    public static async Task<SPR<T>> SuppressTask<T>(Task<SPR<T>> input)
     {
-        return Task;
+        try
+        {
+            return await input;
+        }
+        catch (Exception ex)
+        {
+            return new SPR<T>(new SPF(ex));
+        }
+    }
+    public static async ValueTask<SPR<T>> SuppressValueTask<T>(ValueTask<SPR<T>> input)
+    {
+        try
+        {
+            return await input;
+        }
+        catch (Exception ex)
+        {
+            return new SPR<T>(new SPF(ex));
+        }
     }
 
     public static T Gen<T>(params object?[]? @params) =>
@@ -269,6 +313,7 @@ public interface ISPR;
 /// </summary>
 public struct SPR<T> : ISPR
 {
+
     private SPV<T> Value { get; }
     private SPF Fault { get; }
 
