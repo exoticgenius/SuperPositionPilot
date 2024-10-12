@@ -23,9 +23,12 @@ var sp = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = 
 
 var s = sp.GetService<IX>();
 
-var res = s.Z(null, 2);
+var res = s.Z("000", 2);
 
+if (!res.Succeed(out (string rx, int ry) val))
+    return;
 
+Console.WriteLine(val.rx);
 
 
 
@@ -42,14 +45,9 @@ static Type Extend(Type pluginType)
     var type = module.DefineType("WrapperImplementation_" + pluginType.Name, TypeAttributes.Public, pluginType, pluginType.GetInterfaces());
 
     foreach (var item in pluginType.GetConstructors())
-    {
         GenerateConstructor(type, item);
-    }
-
-
-    var pm = pluginType.GetMethod("Z");
-
-    GenerateMethod(pm, type);
+    foreach (var item in pluginType.GetRuntimeMethods().Where(x => typeof(ISPR).IsAssignableFrom(x.ReturnType)))
+        GenerateMethod(item, type);
 
     var ct = type.CreateType();
 
@@ -183,7 +181,7 @@ public class X : IX
 {
     public X()
     {
-        
+
     }
     private int x = 2;
     private IServiceProvider psp;
@@ -199,13 +197,13 @@ public class X : IX
     }
 }
 
-
+public interface ISPR;
 /// <summary>
 /// super position result,
 /// equivalents to a maybe result that can contain result data or exception at the same time,
 /// and is not determinable until result qualification happens
 /// </summary>
-public struct SPR<T>
+public struct SPR<T> : ISPR
 {
     private SPV<T> Value { get; }
     private SPF Fault { get; }
