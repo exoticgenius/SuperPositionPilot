@@ -5,39 +5,32 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Collections.Concurrent;
-using System.Linq.Expressions;
 
 var sc = new ServiceCollection();
 sc.AddSingleton<IX, X>();
 
 
 
-var r = SP.Extend<X>();
 
-
-foreach (var service in sc.ToList())
-    sc.Replace(ServiceDescriptor.Describe(
-        service.ServiceType,
-        SP.Extend(service.ImplementationType),
-        service.Lifetime));
 
 
 var sp = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = false });
 
 var s = sp.GetService<IX>();
 
-var res = s.Z("err", 2);
+var res =await s.Z(":", 2);
 
-if (!(await res).Succeed(out string rx))
+if (!(res).Succeed(out string rx))
 {
     Console.WriteLine("error captured");
 }
+else
+{
+    res.Faulted(out var f);
+    return; //f;
+}
 
 Console.WriteLine(rx);
-
-
-Console.ReadLine();
-
 
 
 
@@ -45,7 +38,6 @@ public static class SP
 {
     private static ConcurrentDictionary<Assembly, ModuleBuilder> ModuleBuilders;
     private static ConcurrentDictionary<Type, Type> TypeMapper;
-
     static SP()
     {
         ModuleBuilders = new();
@@ -55,8 +47,17 @@ public static class SP
     public static Type Extend<T>() =>
         Extend(typeof(T));
 
-    public static Type Extend(Type target)
+    public static Type? Extend(Type target)
     {
+        if (!target
+            .GetRuntimeMethods()
+            .Any(x =>
+                typeof(ISPR).IsAssignableFrom(x.ReturnType) ||
+                    (typeof(Task).IsAssignableFrom(x.ReturnType) &&
+                    x.ReturnType.IsGenericType &&
+                    typeof(ISPR).IsAssignableFrom(x.ReturnType.GenericTypeArguments[0]))))
+            return null;
+
         var module = ModuleBuilders
             .GetOrAdd(
                 target.Assembly,
@@ -82,10 +83,16 @@ public static class SP
 
         foreach (var item in target
             .GetRuntimeMethods()
-            .Where(x => typeof(ISPR).IsAssignableFrom(x.ReturnType) || typeof(Task).IsAssignableFrom(x.ReturnType)))
+            .Where(x =>
+                typeof(ISPR).IsAssignableFrom(x.ReturnType) ||
+                    (typeof(Task).IsAssignableFrom(x.ReturnType) &&
+                    x.ReturnType.IsGenericType &&
+                    typeof(ISPR).IsAssignableFrom(x.ReturnType.GenericTypeArguments[0]))))
             GenerateMethod(item, typeBuilder);
 
-        return TypeMapper[target] = typeBuilder.CreateType()!;
+        var ct = TypeMapper[target] = typeBuilder.CreateType()!;
+
+        return ct;
     }
 
     private static void GenerateConstructor(TypeBuilder type, ConstructorInfo item)
@@ -127,7 +134,7 @@ public static class SP
 
         if (typeof(Task).IsAssignableFrom(returnType))
         {
-            il.Emit(OpCodes.Call, typeof(SP).GetMethods().First(x=>x.Name == "SuppressTask").MakeGenericMethod(returnType.GenericTypeArguments[0].GenericTypeArguments));
+            il.Emit(OpCodes.Call, typeof(SP).GetMethods().First(x => x.Name == "SuppressTask").MakeGenericMethod(returnType.GenericTypeArguments[0].GenericTypeArguments));
         }
         else if (typeof(ValueTask).IsAssignableFrom(returnType))
         {
@@ -157,7 +164,7 @@ public static class SP
             il.Emit(OpCodes.Stelem_Ref);
         }
 
-        il.Emit(OpCodes.Ldloc_2); //2
+        il.Emit(OpCodes.Ldloc_2); //2 => 2
 
         il.Emit(OpCodes.Newobj, typeof(SPF).GetConstructor(new Type[] { typeof(Type), typeof(object[]), typeof(Exception) })!);
 
@@ -171,7 +178,7 @@ public static class SP
         else if (typeof(ValueTask).IsAssignableFrom(returnType))
         {
             il.Emit(OpCodes.Newobj, typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments).GetConstructor(new Type[] { typeof(SPF) })!);
-            il.Emit(OpCodes.Call, typeof(ValueTask<>).MakeGenericType(typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments)).GetConstructor([typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments)]));
+            il.Emit(OpCodes.Call, typeof(ValueTask<>).MakeGenericType(typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments)).GetConstructor(new Type[] { typeof(SPR<>).MakeGenericType(returnType.GenericTypeArguments[0].GenericTypeArguments) }));
         }
         else
         {
@@ -236,6 +243,7 @@ public static class SP<T>
     }
 }
 
+
 //[DllImport("kernel32.dll", SetLastError = true)]
 //static extern bool VirtualProtect(IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
 
@@ -288,7 +296,7 @@ public class X : IX
 {
     public X()
     {
-        throw new Exception("stor");
+
     }
     private int x = 2;
     private IServiceProvider psp;
@@ -313,7 +321,6 @@ public interface ISPR;
 /// </summary>
 public struct SPR<T> : ISPR
 {
-
     private SPV<T> Value { get; }
     private SPF Fault { get; }
 
@@ -331,7 +338,7 @@ public struct SPR<T> : ISPR
 
     public bool Succeed() => Value.Completed;
 
-    public bool Succeed(out T? result)
+    public bool Succeed(out T result)
     {
         if (Value.Completed)
         {
@@ -339,7 +346,7 @@ public struct SPR<T> : ISPR
             return true;
         }
 
-        result = default;
+        result = default!;
         return false;
     }
 
@@ -363,58 +370,6 @@ public struct SPR<T> : ISPR
     public static implicit operator SPR<T>(in SPF fault) =>
         new SPR<T>(fault);
 }
-//public struct TSPR<T> : ISPR
-//{
-//    private SPV<Task<T>> Value { get; }
-//    private SPF Fault { get; }
-
-//    public TSPR(Task<T> val)
-//    {
-//        Value = new SPV<Task<T>>(val);
-//        Fault = default;
-//    }
-
-//    public TSPR(SPF fault)
-//    {
-//        Value = default;
-//        Fault = fault;
-//    }
-
-//    public bool Succeed() => Value.Completed;
-
-//    public async Task<bool> Succeed(out T? result)
-//    {
-//        if (Value.Completed)
-//        {
-//            result = await Value.Payload;
-//            return true;
-//        }
-
-//        result = default;
-//        return false;
-//    }
-
-//    public bool Faulted() => !Value.Completed;
-
-//    public bool Faulted(out SPF fault)
-//    {
-//        if (!Value.Completed)
-//        {
-//            fault = Fault;
-//            return true;
-//        }
-
-//        fault = default;
-//        return false;
-//    }
-
-//    public static implicit operator SPR<T>(in T val) =>
-//        new SPR<T>(val);
-
-//    public static implicit operator SPR<T>(in SPF fault) =>
-//        new SPR<T>(fault);
-//}
-
 
 /// <summary>
 /// super position fault
@@ -422,13 +377,13 @@ public struct SPR<T> : ISPR
 public struct SPF
 {
     #region ' props '
-    public LinkedList<Type>? CapturedContext { get; private set; }
+    public LinkedList<Type>? CapturedContext { get; }
 
-    public object[]? Parameters { get; private set; }
+    public object[]? Parameters { get; }
 
-    public Exception? Exception { get; private set; }
+    public Exception? Exception { get; }
 
-    public string? Message { get; private set; }
+    public string? Message { get; }
     #endregion ' props '
 
     #region ' ctors '
@@ -499,18 +454,24 @@ public struct SPF
 /// </summary>
 public struct SPV<T>
 {
-    public bool Completed { get; set; }
-    public T? Payload { get; set; }
+    public bool Completed { get; }
+    public T Payload { get; }
 
-    public SPV(bool completed = true)
-    {
-        Completed = completed;
-        Payload = default;
-    }
+    public SPV() : this(false, default!) { }
 
-    public SPV(T payload)
+    public SPV(bool completed) : this(completed, default!) { }
+
+    public SPV(T payload) : this(true, payload) { }
+
+    public SPV(bool compeleted, T payload)
     {
-        Completed = true;
+        Completed = compeleted;
         Payload = payload;
     }
+
+    public SPV<T> DoneSPV() =>
+        new SPV<T>(true);
+
+    public SPV<T> UndoneSPV() =>
+        new SPV<T>(false);
 }
