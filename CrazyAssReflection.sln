@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CrazyAssReflection", "Crazy
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "fwtest", "fwtest\fwtest.csproj", "{8C73F3F4-00BF-4D11-8BC4-FB333D250362}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Generator", "Generator\Generator.csproj", "{F295C143-96A5-40AE-BCC9-4DB0D037A358}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SPL", "SPL\SPL.csproj", "{57D031C7-69CA-44C9-8EDB-C7A49F2FF1CD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +25,14 @@ Global
 		{8C73F3F4-00BF-4D11-8BC4-FB333D250362}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8C73F3F4-00BF-4D11-8BC4-FB333D250362}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8C73F3F4-00BF-4D11-8BC4-FB333D250362}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F295C143-96A5-40AE-BCC9-4DB0D037A358}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F295C143-96A5-40AE-BCC9-4DB0D037A358}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F295C143-96A5-40AE-BCC9-4DB0D037A358}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F295C143-96A5-40AE-BCC9-4DB0D037A358}.Release|Any CPU.Build.0 = Release|Any CPU
+		{57D031C7-69CA-44C9-8EDB-C7A49F2FF1CD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{57D031C7-69CA-44C9-8EDB-C7A49F2FF1CD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{57D031C7-69CA-44C9-8EDB-C7A49F2FF1CD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{57D031C7-69CA-44C9-8EDB-C7A49F2FF1CD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
